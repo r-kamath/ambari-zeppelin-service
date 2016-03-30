@@ -25,10 +25,7 @@
                 make beautiful data-driven, interactive and collaborative documents with SQL, Scala
                 and more.
             </comment>
-            <version>0.0.5</version>
-            <requiredServices>
-                <service>SPARK</service>
-            </requiredServices>
+            <version>0.6.0</version>
             <components>
                 <component>
                     <name>ZEPPELIN_MASTER</name>
@@ -123,7 +120,6 @@
             </requiredServices>
 
             <configuration-dependencies>
-                <config-type>zeppelin-ambari-config</config-type>
                 <config-type>zeppelin-config</config-type>
             </configuration-dependencies>
             <restartRequiredAfterChange>false</restartRequiredAfterChange>

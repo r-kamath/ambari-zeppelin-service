@@ -1,3 +1,4 @@
+#!/usr/bin/env python
 """
 Licensed to the Apache Software Foundation (ASF) under one
 or more contributor license agreements.  See the NOTICE file
@@ -15,55 +16,54 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 
-Ambari Agent
-
 """
 
+import functools
 import os
 import re
-from resource_management import *
+
+from resource_management.libraries.functions import conf_select
+from resource_management.libraries.functions import get_kinit_path
+from resource_management.libraries.functions import hdp_select
 from resource_management.libraries.functions.default import default
-from resource_management.libraries.functions.version import format_hdp_stack_version
+from resource_management.libraries.functions.get_hdp_version import get_hdp_version
+from resource_management.libraries.functions.version import format_hdp_version
+from resource_management.libraries.resources.hdfs_resource import HdfsResource
 from resource_management.libraries.script.script import Script
 
+
 def get_port_from_url(address):
-    if not is_empty(address):
-        return address.split(':')[-1]
-    else:
-        return address
+  if not (address is None):
+    return address.split(':')[-1]
+  else:
+    return address
 
 
 # server configurations
 config = Script.get_config()
+stack_root = Script.get_stack_root()
 
 # e.g. /var/lib/ambari-agent/cache/stacks/HDP/2.2/services/zeppelin-stack/package
 service_packagedir = os.path.realpath(__file__).split('/scripts')[0]
 
 zeppelin_dirname = 'zeppelin-server/lib'
 
-# params from zeppelin-ambari-config
-#install_dir = config['configurations']['zeppelin-ambari-config']['zeppelin.install.dir']
-install_dir = '/usr/hdp/current'
-executor_mem = config['configurations']['zeppelin-ambari-config']['zeppelin.executor.mem']
-executor_instances = config['configurations']['zeppelin-ambari-config'][
-    'zeppelin.executor.instances']
+install_dir = os.path.join(stack_root, "current")
+executor_mem = config['configurations']['zeppelin-env']['zeppelin.executor.mem']
+executor_instances = config['configurations']['zeppelin-env'][
+  'zeppelin.executor.instances']
 
-# disable option to build zeppelin from source for the TP
-setup_prebuilt = config['configurations']['zeppelin-ambari-config']['zeppelin.setup.prebuilt']
-# setup_prebuilt = 'true'
-
-spark_jar_dir = config['configurations']['zeppelin-ambari-config']['zeppelin.spark.jar.dir']
+spark_jar_dir = config['configurations']['zeppelin-env']['zeppelin.spark.jar.dir']
 spark_jar = format("{spark_jar_dir}/zeppelin-spark-0.5.5-SNAPSHOT.jar")
-setup_view = config['configurations']['zeppelin-ambari-config']['zeppelin.setup.view']
-temp_file = config['configurations']['zeppelin-ambari-config']['zeppelin.temp.file']
-spark_home = config['configurations']['zeppelin-ambari-config']['spark.home']
-zeppelin_host = config['configurations']['zeppelin-ambari-config']['zeppelin.host.publicname']
-install_python_packages = config['configurations']['zeppelin-ambari-config'][
-    'zeppelin.install_python_packages']
+setup_view = True
+temp_file = config['configurations']['zeppelin-env']['zeppelin.temp.file']
+spark_home = os.path.join(stack_root, "current", "spark-client")
 
-# spark_version = str(config['configurations']['zeppelin-ambari-config']['zeppelin.spark.version'])
-fline = open(spark_home + "/RELEASE").readline().rstrip()
-spark_version = re.search('Spark (\d\.\d).+', fline).group(1)
+try:
+  fline = open(spark_home + "/RELEASE").readline().rstrip()
+  spark_version = re.search('Spark (\d\.\d).+', fline).group(1)
+except:
+  pass
 
 # params from zeppelin-config
 zeppelin_port = str(config['configurations']['zeppelin-config']['zeppelin.server.port'])
@@ -87,50 +87,69 @@ zeppelin_env_content = config['configurations']['zeppelin-env']['content']
 master_configs = config['clusterHostInfo']
 java64_home = config['hostLevelParams']['java_home']
 ambari_host = str(master_configs['ambari_server_host'][0])
-zeppelin_internalhost = str(master_configs['zeppelin_master_hosts'][0])
+zeppelin_host = str(master_configs['zeppelin_master_hosts'][0])
 
 # detect HS2 details, if installed
 
-if 'hive_server_host' in master_configs:
-    hive_server_host = str(master_configs['hive_server_host'][0])
-    hive_metastore_host = str(master_configs['hive_metastore_host'][0])
-    hive_metastore_port = str(
-        get_port_from_url(config['configurations']['hive-site']['hive.metastore.uris']))
-    hive_server_port = str(config['configurations']['hive-site']['hive.server2.thrift.http.port'])
+if 'hive_server_host' in master_configs and len(master_configs['hive_server_host']) != 0:
+  hive_server_host = str(master_configs['hive_server_host'][0])
+  hive_metastore_host = str(master_configs['hive_metastore_host'][0])
+  hive_metastore_port = str(
+    get_port_from_url(config['configurations']['hive-site']['hive.metastore.uris']))
+  hive_server_port = str(config['configurations']['hive-site']['hive.server2.thrift.http.port'])
 else:
-    hive_server_host = None
-    hive_metastore_host = '0.0.0.0'
-    hive_metastore_port = None
-    hive_server_port = None
+  hive_server_host = None
+  hive_metastore_host = '0.0.0.0'
+  hive_metastore_port = None
+  hive_server_port = None
 
 # detect hbase details if installed
 if 'hbase_master_hosts' in master_configs and 'hbase-site' in config['configurations']:
-    zookeeper_znode_parent = config['configurations']['hbase-site']['zookeeper.znode.parent']
-    hbase_zookeeper_quorum = config['configurations']['hbase-site']['hbase.zookeeper.quorum']
+  zookeeper_znode_parent = config['configurations']['hbase-site']['zookeeper.znode.parent']
+  hbase_zookeeper_quorum = config['configurations']['hbase-site']['hbase.zookeeper.quorum']
 else:
-    zookeeper_znode_parent = None
-    hbase_zookeeper_quorum = None
+  zookeeper_znode_parent = None
+  hbase_zookeeper_quorum = None
 
 # detect spark queue
 if 'spark.yarn.queue' in config['configurations']['spark-defaults']:
-    spark_queue = config['configurations']['spark-defaults']['spark.yarn.queue']
+  spark_queue = config['configurations']['spark-defaults']['spark.yarn.queue']
 else:
-    spark_queue = 'default'
-
-# if user did not specify public hostname of zeppelin node, proceed with internal name instead
-if zeppelin_host.strip() == '':
-    zeppelin_host = zeppelin_internalhost
+  spark_queue = 'default'
 
 # e.g. 2.3
-stack_version_unformatted = str(config['hostLevelParams']['stack_version'])
+stack_version_unformatted = config['hostLevelParams']['stack_version']
 
 # e.g. 2.3.0.0
-hdp_stack_version = format_hdp_stack_version(stack_version_unformatted)
+stack_version_formatted = format_hdp_version(stack_version_unformatted)
 
 # e.g. 2.3.0.0-2130
-full_version = default("/commandParams/version", None)
-hdp_version = full_version
+full_stack_version = default("/commandParams/version", None)
 
-# e.g. 2.3.0.0-2130
-if hasattr(functions, 'get_hdp_version'):
-    spark_client_version = functions.get_hdp_version('spark-client')
+spark_client_version = get_hdp_version('spark-client')
+
+hdfs_user = config['configurations']['hadoop-env']['hdfs_user']
+security_enabled = config['configurations']['cluster-env']['security_enabled']
+hdfs_user_keytab = config['configurations']['hadoop-env']['hdfs_user_keytab']
+kinit_path_local = get_kinit_path(default('/configurations/kerberos-env/executable_search_paths', None))
+hadoop_bin_dir = hdp_select.get_hadoop_dir("bin")
+hadoop_conf_dir = conf_select.get_hadoop_conf_dir()
+hdfs_principal_name = config['configurations']['hadoop-env']['hdfs_principal_name']
+hdfs_site = config['configurations']['hdfs-site']
+default_fs = config['configurations']['core-site']['fs.defaultFS']
+
+# create partial functions with common arguments for every HdfsResource call
+# to create hdfs directory we need to call params.HdfsResource in code
+HdfsResource = functools.partial(
+  HdfsResource,
+  user=hdfs_user,
+  hdfs_resource_ignore_file="/var/lib/ambari-agent/data/.hdfs_resource_ignore",
+  security_enabled=security_enabled,
+  keytab=hdfs_user_keytab,
+  kinit_path_local=kinit_path_local,
+  hadoop_bin_dir=hadoop_bin_dir,
+  hadoop_conf_dir=hadoop_conf_dir,
+  principal_name=hdfs_principal_name,
+  hdfs_site=hdfs_site,
+  default_fs=default_fs
+)
